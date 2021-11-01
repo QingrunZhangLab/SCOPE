@@ -41,7 +41,7 @@ Rscript 2_null_corr.R EXPR_FILE ITERS PROBES_PER_ITER START_SEED PREFIX
 ```
 The arguments supplied here are as follows:
 - EXPR_FILE - the expression data file (as shown above)
-- ITERS - this denotes the numebr of sets of _PROBES_PER_ITER_ variables (genes/transcripts) that are selected to calculated correlation matrices _(default = 100)_
+- ITERS - this denotes the number of sets of _PROBES_PER_ITER_ variables (genes/transcripts) that are selected to calculated correlation matrices _(default = 100)_
 - PROBES_PER_ITER - the number of variables (genes/transcripts) that are selected in each iteration to calculate the correlation matrices _(default = 1000)_
 - START_SEED - random start seed _(default = 2222)_
 - PREFIX - output files are prefixed using this string. Run each dataset with a different prefix such that outputs are distiguishable! _(default = "stabilized_lasso")_
@@ -55,7 +55,7 @@ Rscript 3_null_diff_corr.R EXPR_FILE ITERS PROBES_PER_ITER START_SEED PREFIX
 ```
 The arguments supplied here are as follows:
 - EXPR_FILE - the expression data file (as shown above)
-- ITERS - this denotes the numebr of sets of _PROBES_PER_ITER_ variables (genes/transcripts) that are selected to calculated correlation matrices. i.e. In each iteration _PROBES_PER_ITER_ number of columns are selected from the expression matrixes for both phenotypes and the differences in correlations among these calculated. _(default = 100)_
+- ITERS - this denotes the number of sets of _PROBES_PER_ITER_ variables (genes/transcripts) that are selected to calculated correlation matrices. i.e. In each iteration _PROBES_PER_ITER_ number of columns are selected from the expression matrixes for both phenotypes and the differences in correlations among these calculated. _(default = 100)_
 - PROBES_PER_ITER - the number of variables (genes/transcripts) that are selected in each iteration to calculate the correlation matrices _(default = 1000)_
 - START_SEED - random start seed _(default = 2222)_
 - PREFIX - output files are prefixed using this string. Run each dataset with a different prefix such that outputs are distiguishable! _(default = "stabilized_lasso")_
