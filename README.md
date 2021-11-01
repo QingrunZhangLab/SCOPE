@@ -23,7 +23,7 @@ Rscript --max-ppsize=500000 1_glmnet_stabilized_lasso.R EXPR_FILE ITERS FOLDS ST
 ```
 The arguments supplied here are as follows:
 - EXPR_FILE - the expression data file (as shown above)
-- ITERS - this denotes the numebr of LASSO models that must be trained using the given data (e.g.: ITERS=100 indicates training 100 independent LASSO models on separate training subsets of the original data) _(default = 1000)_
+- ITERS - this denotes the number of LASSO models that must be trained using the given data (e.g.: ITERS=100 indicates training 100 independent LASSO models on separate training subsets of the original data) _(default = 1000)_
 - FOLDS - the number of cross-validation folds to use in the lasso models _(default = 10)_
 - START_SEED - random start seed _(default = 2222)_
 - PREFIX - output files are prefixed using this string. Run each dataset with a different prefix such that outputs are distiguishable! _(default = "stabilized_lasso")_
