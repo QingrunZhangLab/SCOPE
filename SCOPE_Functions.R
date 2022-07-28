@@ -3,9 +3,28 @@ pacman::p_load(data.table,
                stringr,
                glmnetUtils,
                WebGestaltR,
-               SKAT)
+               caTools)
 
-source("Utils.R")
+flattenCorrMatrix <- function(corMat) {
+  ut <- upper.tri(corMat)
+  data.table(
+    row = rownames(corMat)[row(corMat)[ut]],
+    column = rownames(corMat)[col(corMat)[ut]],
+    cor  = (corMat)[ut]
+  )
+}
+
+removeZeroVariance <- function(exprData){
+  vars <- sapply(exprData, var)
+  non_constants <- names(vars)[vars!=0 | is.na(vars)]
+  return(exprData[, ..non_constants])
+}
+
+removeLowVariance <- function(exprData, quantileToRemove = 0.25){
+  vars <- sapply(exprData, var)
+  high_vars <- names(vars)[is.na(vars) | vars >= quantile(vars, quantileToRemove, na.rm = TRUE)]
+  return(exprData[, ..high_vars])
+}
 
 nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
   positive_cutoffs <- c()
@@ -25,15 +44,15 @@ nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, quantileC
               negativeCut = median(negative_cutoffs)))
 }
 
-nullDiffCorr <- function(exprData, phenotypeotype, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
-  exprData$phenotypeotype <- phenotypeotype
+nullDiffCorr <- function(exprData, phenotype, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
+  exprData$phenotype <- phenotype
   
   diffcorr_cutoffs <- c()
   
-  case <- exprData[phenotypeotype == 1,]
-  control <- exprData[phenotypeotype == 0,]
+  case <- exprData[phenotype == 1,]
+  control <- exprData[phenotype == 0,]
   
-  for(diffcorr_iter in 1:iterations){
+  for(diffcorr_iter in seq(1, iterations)){
     
     rnd_smp <- sample(colnames(exprData)[seq(1,(ncol(exprData)-1))], probesPerIter)
     
@@ -58,13 +77,15 @@ nullDiffCorr <- function(exprData, phenotypeotype, iterations = 100, probesPerIt
 pathwayEnrichment <- function(interestGene,
                               organism = "hsapiens", enrichDatabase="pathway_KEGG",
                               interestGeneType="ensembl_gene_id", referenceGeneType = "ensembl_gene_id",
-                              referenceSet = "genome", ...){
+                              referenceSet = "genome", isOutput = FALSE, ...){
   
   enrichment_results <- tryCatch(as.data.table(WebGestaltR(interestGene = interestGene,
-                                                           organism = "hsapiens",
-                                                           enrichDatabase="pathway_KEGG",
-                                                           interestGeneType="ensembl_gene_id", referenceSet = "genome",
-                                                           referenceGeneType = "ensembl_gene_id", ...)),
+                                                           organism = organism,
+                                                           enrichDatabase = enrichDatabase,
+                                                           interestGeneType = interestGeneType, 
+                                                           referenceSet = referenceSet,
+                                                           referenceGeneType = referenceGeneType, 
+                                                           isOutput = FALSE, ...)),
                                  error = function(c){
                                    print("Error in enrichment. Skipping...")
                                    NULL
@@ -95,7 +116,7 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
     inds <- sample.split(exprData$phenotype, SplitRatio = splitRatio)
     
     #TODO: Add progressbar
-    print(paste0("Currently fitting iteration: ", k, " of ", iterations, "\n"))
+    print(paste0("Currently fitting iteration: ", k, " of ", iterations))
     
     # Fitting a glmnet LASSO model for the training data
     cvfit <- glmnetUtils::cv.glmnet(formula = as.formula(formula), data = exprData[inds,], alpha = 1,
@@ -120,9 +141,11 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
   }
   
   coefficientSummary <- data.table(probe = lassoResults$probe,
-                                   model.count = iterations - rowSums(is.na(lassoResults[, seq(2,ncol(lassoResults))])),
-                                   min.val = apply(lassoResults[, seq(2,ncol(lassoResults))], 1, min, na.rm = TRUE),
-                                   max.val = apply(lassoResults[, seq(2,ncol(lassoResults))], 1, max, na.rm = TRUE))
+                                   model.count = iterations - rowSums(is.na(lassoResults[, 2:ncol(lassoResults)])),
+                                   min.val = apply(lassoResults[, 2:ncol(lassoResults)], 1, min, na.rm = TRUE),
+                                   max.val = apply(lassoResults[, 2:ncol(lassoResults)], 1, max, na.rm = TRUE))
+  
+  coefficientSummary <- coefficientSummary[order(coefficientSummary$model.count, decreasing = TRUE)]
   
   identifiedGenes <- coefficientSummary$probe[(coefficientSummary$model.count/iterations) > propCutoff]
   identifiedGenes <- unique(unlist(str_split(identifiedGenes, ":")))
@@ -132,7 +155,7 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
   caseData <- exprData[phenotype == 1,]
   controlData <- exprData[phenotype == 0,]
   
-  print(paste0("Currently calculating CGNs\n"))
+  print(paste0("Currently calculating CGNs"))
   if(length(identifiedGenes)>0){
     
     # For each core gene, co-expression values in the complete dataset,
@@ -183,7 +206,7 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
     
     pathwayResults <- c()
     
-    print(paste0("Currently conducting SLASSO pathway enrichment\n"))
+    print(paste0("Currently conducting SLASSO pathway enrichment"))
     for(currCoreGene in unique(filteredResults$`Core Gene`)){
       
       currGeneList <- c(currCoreGene, filteredResults$`Secondary Gene`[filteredResults$`Core Gene` == currCoreGene])
@@ -202,9 +225,9 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
     }
   }
   
-  return(list(coefficientSummary,
+  return(list(coefficientSummary = coefficientSummary,
               coreGenes = identifiedGenes,
-              pathwayResults))
+              pathwayResults = pathwayResults))
 }
 
 
