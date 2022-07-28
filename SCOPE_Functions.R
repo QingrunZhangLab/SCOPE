@@ -47,31 +47,31 @@ nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, quantileC
 nullDiffCorr <- function(exprData, phenotype, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
   exprData$phenotype <- phenotype
   
-  diffcorr_cutoffs <- c()
+  diffCorrCutoffs <- c()
   
   case <- exprData[phenotype == 1,]
   control <- exprData[phenotype == 0,]
   
   for(diffcorr_iter in seq(1, iterations)){
     
-    rnd_smp <- sample(colnames(exprData)[seq(1,(ncol(exprData)-1))], probesPerIter)
+    rndSample <- sample(colnames(exprData)[seq(1,(ncol(exprData)-1))], probesPerIter)
     
-    case_sel <- case[, ..rnd_smp]
-    control_sel <- control[, ..rnd_smp]
+    caseSelected <- case[, ..rndSample]
+    controlSelected <- control[, ..rndSample]
     
-    case_cor <- cor(case_sel)
-    control_cor <- cor(control_sel)
+    caseCorr <- cor(caseSelected)
+    controlCorr <- cor(controlSelected)
     
-    case_corflat <- flattenCorrMatrix(case_cor)
-    control_corflat <- flattenCorrMatrix(control_cor)
+    caseCorrFlat <- flattenCorrMatrix(caseCorr)
+    controlCorrFlat <- flattenCorrMatrix(controlCorr)
     
-    merged <- merge(case_corflat, control_corflat, by = c("row", "column"))
-    merged$diffcor <- abs(merged$cor.x - merged$cor.y)
+    merged <- merge(caseCorrFlat, controlCorrFlat, by = c("row", "column"))
+    merged$diffCorr <- abs(merged$cor.x - merged$cor.y)
     
-    diffcorr_cutoffs <- c(diffcorr_cutoffs, quantile(merged$diffcor, quantileCutoff, na.rm = TRUE))
+    diffCorrCutoffs <- c(diffCorrCutoffs, quantile(merged$diffCorr, quantileCutoff, na.rm = TRUE))
   }
   
-  return(median(diffcorr_cutoffs))
+  return(median(diffCorrCutoffs))
 }
 
 pathwayEnrichment <- function(interestGene,
@@ -98,7 +98,13 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
                             cvFolds = 10, parallel = FALSE,
                             propCutoff = 0.8, 
                             nullCorr, 
-                            nullDiffCorr){
+                            nullDiffCorr,
+                            enrichmentOrganism = "hsapiens", 
+                            enrichmentEnrichDatabase="pathway_KEGG",
+                            enrichmentInterestGeneType="ensembl_gene_id", 
+                            enrichmentReferenceGeneType = "ensembl_gene_id",
+                            enrichmentReferenceSet = "genome", 
+                            enrichmentIsOutput = FALSE){
   
   exprData$phenotype <- phenotype
   
@@ -212,7 +218,13 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
       currGeneList <- c(currCoreGene, filteredResults$`Secondary Gene`[filteredResults$`Core Gene` == currCoreGene])
       currGeneList <- gsub("\\..*","", currGeneList)
       
-      enrichmentResults <- pathwayEnrichment(interestGene = currGeneList)
+      enrichmentResults <- pathwayEnrichment(interestGene = currGeneList,
+                                             organism = enrichmentOrganism, 
+                                             enrichDatabase = enrichmentEnrichDatabase,
+                                             interestGeneType = enrichmentInterestGeneType, 
+                                             referenceGeneType = enrichmentReferenceGeneType,
+                                             referenceSet = enrichmentReferenceSet, 
+                                             isOutput = enrichmentIsOutput)
       
       if(is.null(enrichmentResults) || nrow(enrichmentResults) == 0){
         print("No pathways enriched. Skipping...")
