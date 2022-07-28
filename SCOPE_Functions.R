@@ -1,32 +1,41 @@
-null_corr <- function(expr.data, iters = 100, probes.per.iter = 1000, quantile.cutoff = 0.975){
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(data.table, 
+               stringr,
+               glmnetUtils,
+               WebGestaltR,
+               SKAT)
+
+source("Utils.R")
+
+nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
   positive_cutoffs <- c()
   negative_cutoffs <- c()
   
-  for(i in 1:iters){
-    rnd_smp <- sample(colnames(expr.data), probes.per.iter)
+  for(i in 1:iterations){
+    rnd_smp <- sample(colnames(exprData), probesPerIter)
     
-    cor_mat <- cor(expr.data[, ..rnd_smp])
+    cor_mat <- cor(exprData[, ..rnd_smp])
     corrs <- flattenCorrMatrix(cor_mat)
     
-    positive_cutoffs <- c(positive_cutoffs, quantile(corrs$cor[corrs$cor > 0], quantile.cutoff))
-    negative_cutoffs <- c(negative_cutoffs, -1*quantile(-1*corrs$cor[corrs$cor < 0], quantile.cutoff))
+    positive_cutoffs <- c(positive_cutoffs, quantile(corrs$cor[corrs$cor > 0], quantileCutoff))
+    negative_cutoffs <- c(negative_cutoffs, -1*quantile(-1*corrs$cor[corrs$cor < 0], quantileCutoff))
   }
   
-  return(list(positive_cut = median(positive_cutoffs),
-              negative_cut = median(negative_cutoffs)))
+  return(list(positiveCut = median(positive_cutoffs),
+              negativeCut = median(negative_cutoffs)))
 }
 
-null_diffcorr <- function(expr.data, phen, iters = 100, probes.per.iter = 1000, quantile.cutoff = 0.975){
-  expr.data$phen <- phen
+nullDiffCorr <- function(exprData, phenotypeotype, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
+  exprData$phenotypeotype <- phenotypeotype
   
   diffcorr_cutoffs <- c()
   
-  case <- expr.data[phen == 1,]
-  control <- expr.data[phen == 0,]
+  case <- exprData[phenotypeotype == 1,]
+  control <- exprData[phenotypeotype == 0,]
   
-  for(diffcorr_iter in 1:iters){
+  for(diffcorr_iter in 1:iterations){
     
-    rnd_smp <- sample(colnames(expr.data)[1:(ncol(expr.data)-1)], probes.per.iter)
+    rnd_smp <- sample(colnames(exprData)[seq(1,(ncol(exprData)-1))], probesPerIter)
     
     case_sel <- case[, ..rnd_smp]
     control_sel <- control[, ..rnd_smp]
@@ -40,181 +49,162 @@ null_diffcorr <- function(expr.data, phen, iters = 100, probes.per.iter = 1000, 
     merged <- merge(case_corflat, control_corflat, by = c("row", "column"))
     merged$diffcor <- abs(merged$cor.x - merged$cor.y)
     
-    diffcorr_cutoffs <- c(diffcorr_cutoffs, quantile(merged$diffcor, quantile.cutoff, na.rm = TRUE))
+    diffcorr_cutoffs <- c(diffcorr_cutoffs, quantile(merged$diffcor, quantileCutoff, na.rm = TRUE))
   }
   
   return(median(diffcorr_cutoffs))
 }
 
-slasso_run <- function(expr.data, phen, formula = NULL, 
-                       seed_start = 2222,
-                       iters = 1000, split_ratio = 0.7, 
-                       cv.folds = 10, parallel = FALSE,
-                       prop_cutoff = 0.8, 
-                       c_pos_cutoff, c_neg_cutoff, 
-                       d_cutoff, 
-                       pathway.data,
-                       log.file, 
-                       info){
+pathwayEnrichment <- function(interestGene,
+                              organism = "hsapiens", enrichDatabase="pathway_KEGG",
+                              interestGeneType="ensembl_gene_id", referenceGeneType = "ensembl_gene_id",
+                              referenceSet = "genome", ...){
   
-  expr.data$phen <- phen
+  enrichment_results <- tryCatch(as.data.table(WebGestaltR(interestGene = interestGene,
+                                                           organism = "hsapiens",
+                                                           enrichDatabase="pathway_KEGG",
+                                                           interestGeneType="ensembl_gene_id", referenceSet = "genome",
+                                                           referenceGeneType = "ensembl_gene_id", ...)),
+                                 error = function(c){
+                                   print("Error in enrichment. Skipping...")
+                                   NULL
+                                 })
+}
+
+stabilizedLasso <- function(exprData, phenotype, formula = NULL, 
+                            seed = 2222,
+                            iterations = 1000, splitRatio = 0.7, 
+                            cvFolds = 10, parallel = FALSE,
+                            propCutoff = 0.8, 
+                            nullCorr, 
+                            nullDiffCorr){
   
-  results <- c()
+  exprData$phenotype <- phenotype
+  
+  lassoResults <- c()
   # pred_metrics <- c()
   
   if(is.null(formula)){
-    formula <- "phen ~ ."
+    formula <- "phenotype ~ ."
   }
   
-  set.seed(seed_start)
-  for(k in 1:iters){
+  set.seed(seed)
+  for(k in seq(1,iterations)){
     
-    # Splitting data proportional to phenotype composition
-    inds  <- sample.split(expr.data$phen, SplitRatio = split_ratio)
+    # Splitting data proportional to phenotypeotype composition
+    inds <- sample.split(exprData$phenotype, SplitRatio = splitRatio)
     
-    # print(table(expr.data$phen[inds]))
+    #TODO: Add progressbar
+    print(paste0("Currently fitting iteration: ", k, " of ", iterations, "\n"))
     
-    cat(paste0("Currently fitting iteration: ", k, " (", info , ") \n"), file = log.file, append = TRUE)
-    
-    # tic("Iteration time")
     # Fitting a glmnet LASSO model for the training data
-    cvfit <- glmnetUtils::cv.glmnet(formula = as.formula(formula), data = expr.data[inds,], alpha = 1,
+    cvfit <- glmnetUtils::cv.glmnet(formula = as.formula(formula), data = exprData[inds,], alpha = 1,
                                     family = "binomial",  
-                                    nfolds = cv.folds, intercept = FALSE,
+                                    nfolds = cvFolds, intercept = FALSE,
                                     parallel = parallel)
     
     # Obtaining fitted coefficients
-    tmp_coeffs <- coef(cvfit)
-    # print("Fitted...")
+    tmpCoeffs <- coef(cvfit)
     
     # Keeping track of results from each of the LASSO models fit in each iteration
-    if(is.null(results)){
-      results <- data.table(probe = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], 
-                            coefficient_1 = tmp_coeffs@x)
+    if(is.null(lassoResults)){
+      lassoResults <- data.table(probe = tmpCoeffs@Dimnames[[1]][tmpCoeffs@i + 1], 
+                            coefficient_1 = tmpCoeffs@x)
     }else{
-      results <- merge(results, data.table(probe = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], 
-                                           coefficient = tmp_coeffs@x), 
+      lassoResults <- merge(lassoResults, data.table(probe = tmpCoeffs@Dimnames[[1]][tmpCoeffs@i + 1], 
+                                           coefficient = tmpCoeffs@x), 
                        all.x=TRUE, all.y=TRUE, 
                        by="probe", suffixes = c("",paste0("_", k)))
     }
     
   }
   
-  # print("Combining LASSO results...")
-  cof_sum <- data.table(probe = results$probe,
-                        model.count = iters - rowSums(is.na(results[,2:ncol(results)])),
-                        min.val = apply(results[,2:ncol(results)], 1, min, na.rm = TRUE),
-                        max.val = apply(results[,2:ncol(results)], 1, max, na.rm = TRUE))
+  coefficientSummary <- data.table(probe = lassoResults$probe,
+                                   model.count = iterations - rowSums(is.na(lassoResults[, seq(2,ncol(lassoResults))])),
+                                   min.val = apply(lassoResults[, seq(2,ncol(lassoResults))], 1, min, na.rm = TRUE),
+                                   max.val = apply(lassoResults[, seq(2,ncol(lassoResults))], 1, max, na.rm = TRUE))
   
-  identified_genes <- cof_sum$probe[(cof_sum$model.count/iters) > prop_cutoff]
-  identified_genes <- unique(unlist(str_split(identified_genes, ":")))
+  identifiedGenes <- coefficientSummary$probe[(coefficientSummary$model.count/iterations) > propCutoff]
+  identifiedGenes <- unique(unlist(str_split(identifiedGenes, ":")))
   
-  corr_results <- c()
-  final_results <- c()
+  corrResults <- c()
+
+  caseData <- exprData[phenotype == 1,]
+  controlData <- exprData[phenotype == 0,]
   
-  case.data <- expr.data[phen == 1,]
-  control.data <- expr.data[phen == 0,]
-  
-  cat(paste0("Currently calculating CGNs (", info , ") \n"), file = log.file, append = TRUE)
-  if(length(identified_genes)>0){
+  print(paste0("Currently calculating CGNs\n"))
+  if(length(identifiedGenes)>0){
     
     # For each core gene, co-expression values in the complete dataset,
     # and each of the phenotypes are calculated.
-    for(i in 1:length(identified_genes)){
+    for(i in seq(1, length(identifiedGenes))){
       
-      core_gene <- identified_genes[i]
-      g1 <- expr.data[[core_gene]]
-      g1_case <- case.data[[core_gene]]
-      g1_control <- control.data[[core_gene]]
+      coreGene <- identifiedGenes[i]
+      gene1 <- exprData[[coreGene]]
+      gene1Case <- caseData[[coreGene]]
+      gene1Control <- controlData[[coreGene]]
       
-      for(j in 1:(ncol(expr.data)-1)){
+      for(j in seq(1, (ncol(exprData)-1))){
         
-        curr_gene <- colnames(expr.data)[j]
-        g2 <- expr.data[[curr_gene]]
-        g2_case <- case.data[[curr_gene]]
-        g2_control <- control.data[[curr_gene]]
+        currGene <- colnames(exprData)[j]
+        gene2 <- exprData[[currGene]]
+        gene2Case <- caseData[[currGene]]
+        gene2Control <- controlData[[currGene]]
         
-        cor_test <- cor.test(g1, g2, method = "pearson")
-        case_test <- cor.test(g1_case, g2_case, method = "pearson")
-        control_test <- cor.test(g1_control, g2_control, method = "pearson")
+        corTest <- cor.test(gene1, gene2, method = "pearson")
+        caseTest <- cor.test(gene1Case, gene2Case, method = "pearson")
+        controlTest <- cor.test(gene1Control, gene2Control, method = "pearson")
         
-        curr_result <- data.table(core_gene = core_gene,
-                                  secondary_gene = curr_gene,
-                                  correlation = cor_test$estimate,
-                                  pval = cor_test$p.value,
-                                  case.corr = case_test$estimate,
-                                  case.pval = case_test$p.value,
-                                  control.corr = control_test$estimate,
-                                  control.pval = control_test$p.value)
+        currResult <- data.table(core_gene = coreGene,
+                                 secondary_gene = currGene,
+                                 correlation = corTest$estimate,
+                                 pval = corTest$p.value,
+                                 case.corr = caseTest$estimate,
+                                 case.pval = caseTest$p.value,
+                                 control.corr = controlTest$estimate,
+                                 control.pval = controlTest$p.value)
         
-        if(is.null(corr_results)){
-          corr_results <- curr_result
-        }else{
-          corr_results <- rbindlist(list(corr_results, curr_result))
-        }
+        corrResults <- rbindlist(list(corrResults, currResult))
       }
     }
     
-    corr_results$corrdiff <- abs(corr_results$case.corr - corr_results$control.corr)
-    corr_results <- corr_results[corr_results$core_gene != corr_results$secondary_gene, ]
+    corrResults$corrdiff <- abs(corrResults$case.corr - corrResults$control.corr)
+    corrResults <- corrResults[corrResults$core_gene != corrResults$secondary_gene, ]
     
-    colnames(corr_results) <- c("Core Gene", "Secondary Gene", 
+    colnames(corrResults) <- c("Core Gene", "Secondary Gene", 
                                 "Correlation", "Correlation p-value", "Case Correlation", "Case Correlation p-value",
                                 "Control Correlation", "Control Correlation p-value", "Differential Correlation")
     
     # Identifying CGNs using secondary genes that are co-expressed or 
     # differentially co-expressed.
-    filtered_results <- corr_results[corr_results$Correlation > c_pos_cutoff | 
-                                       corr_results$Correlation < c_neg_cutoff | 
-                                       corr_results$`Differential Correlation` > d_cutoff,]
+    filteredResults <- corrResults[corrResults$Correlation > nullCorr$positiveCut |
+                                     corrResults$Correlation < nullCorr$negativeCut |
+                                     corrResults$`Differential Correlation` > nullDiffCorr,]
     
-    cat(paste0("Currently conducting SLASSO pathway enrichment (", info , ") \n"), file = log.file, append = TRUE)
-    for(curr_core_gene in unique(filtered_results$`Core Gene`)){
+    pathwayResults <- c()
+    
+    print(paste0("Currently conducting SLASSO pathway enrichment\n"))
+    for(currCoreGene in unique(filteredResults$`Core Gene`)){
       
-      curr_gene_list <- c(curr_core_gene, filtered_results$`Secondary Gene`[filtered_results$`Core Gene` == curr_core_gene])
-      curr_gene_list <- gsub("\\..*","", curr_gene_list)
+      currGeneList <- c(currCoreGene, filteredResults$`Secondary Gene`[filteredResults$`Core Gene` == currCoreGene])
+      currGeneList <- gsub("\\..*","", currGeneList)
       
-      enrichment_results <- NULL
+      enrichmentResults <- pathwayEnrichment(interestGene = currGeneList)
       
-      tryCatch(enrichment_results <- as.data.table(WebGestaltR(interestGene = curr_gene_list,
-                                                               organism = "hsapiens",
-                                                               enrichDatabase="pathway_KEGG",
-                                                               interestGeneType="ensembl_gene_id", referenceSet = "genome",
-                                                               referenceGeneType = "ensembl_gene_id", isOutput = FALSE)),
-               error = function(c){
-                 print("Error in enrichment. Skipping...")
-                 enrichment_results <<- NULL
-               })
-      
-      if(is.null(enrichment_results) || nrow(enrichment_results) == 0){
+      if(is.null(enrichmentResults) || nrow(enrichmentResults) == 0){
         print("No pathways enriched. Skipping...")
         next
       } 
       
-      enrichment_results$`Core Gene` <- curr_core_gene
+      enrichmentResults$`Core Gene` <- currCoreGene
       
-      final_results <- rbindlist(list(final_results, enrichment_results))
-    }
-    
-    if(!is.null(final_results)){
-      final_results$pathway_class <- pathway.data$PathwayClass[match(final_results$geneSet, pathway.data$PathwayID)]
+      pathwayResults <- rbindlist(list(pathwayResults, enrichmentResults))
     }
   }
   
-  
-  return_results <- list()
-  if(length(identified_genes)==0){
-    return_results[["selected_genes"]] <- c("na")
-  }else{
-    return_results[["selected_genes"]] <- identified_genes
-  }
-  if(!is.null(final_results)){
-    return_results[["selected_pathways"]] <- final_results
-  }else{
-    return_results[["selected_pathways"]] <- c("na")
-  }
-  
-  return(return_results)
+  return(list(coefficientSummary,
+              coreGenes = identifiedGenes,
+              pathwayResults))
 }
 
 
