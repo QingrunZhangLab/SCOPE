@@ -26,11 +26,20 @@ removeLowVariance <- function(exprData, quantileToRemove = 0.25){
   return(exprData[, ..high_vars])
 }
 
-nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
+nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, 
+                     quantileCutoff = 0.975){
   positive_cutoffs <- c()
   negative_cutoffs <- c()
   
+  print("Calculating null distribution for coexpression", quote = FALSE)
+  pb <- txtProgressBar(min = 0, 
+                       max = iterations, 
+                       initial = 0,
+                       style = 3)
+  
   for(i in 1:iterations){
+    setTxtProgressBar(pb, i)
+    
     rnd_smp <- sample(colnames(exprData), probesPerIter)
     
     cor_mat <- cor(exprData[, ..rnd_smp])
@@ -40,11 +49,14 @@ nullCorr <- function(exprData, iterations = 100, probesPerIter = 1000, quantileC
     negative_cutoffs <- c(negative_cutoffs, -1*quantile(-1*corrs$cor[corrs$cor < 0], quantileCutoff))
   }
   
+  close(pb)
+  
   return(list(positiveCut = median(positive_cutoffs),
               negativeCut = median(negative_cutoffs)))
 }
 
-nullDiffCorr <- function(exprData, phenotype, iterations = 100, probesPerIter = 1000, quantileCutoff = 0.975){
+nullDiffCorr <- function(exprData, phenotype, iterations = 100, probesPerIter = 1000, 
+                         quantileCutoff = 0.975){
   exprData$phenotype <- phenotype
   
   diffCorrCutoffs <- c()
@@ -52,7 +64,14 @@ nullDiffCorr <- function(exprData, phenotype, iterations = 100, probesPerIter = 
   case <- exprData[phenotype == 1,]
   control <- exprData[phenotype == 0,]
   
+  print("Calculating null distribution for differential coexpression", quote = FALSE)
+  pb <- txtProgressBar(min = 0, 
+                       max = iterations, 
+                       initial = 0,
+                       style = 3)
+  
   for(diffcorr_iter in seq(1, iterations)){
+    setTxtProgressBar(pb, diffcorr_iter)
     
     rndSample <- sample(colnames(exprData)[seq(1,(ncol(exprData)-1))], probesPerIter)
     
@@ -70,6 +89,8 @@ nullDiffCorr <- function(exprData, phenotype, iterations = 100, probesPerIter = 
     
     diffCorrCutoffs <- c(diffCorrCutoffs, quantile(merged$diffCorr, quantileCutoff, na.rm = TRUE))
   }
+  
+  close(pb)
   
   return(median(diffCorrCutoffs))
 }
@@ -92,21 +113,20 @@ pathwayEnrichment <- function(interestGene,
                                  })
 }
 
-stabilizedLasso <- function(exprData, phenotype, formula = NULL, 
+stabilizedLASSO <- function(exprData, phenotype, formula = NULL, 
                             seed = 2222,
-                            iterations = 1000, splitRatio = 0.7, 
-                            cvFolds = 10, parallel = FALSE,
-                            propCutoff = 0.8, 
-                            nullCorr, 
-                            nullDiffCorr,
-                            enrichmentOrganism = "hsapiens", 
-                            enrichmentEnrichDatabase="pathway_KEGG",
-                            enrichmentInterestGeneType="ensembl_gene_id", 
-                            enrichmentReferenceGeneType = "ensembl_gene_id",
-                            enrichmentReferenceSet = "genome", 
-                            enrichmentIsOutput = FALSE){
+                            iterations = 1000, splitRatio = 0.7,
+                            cvFolds = 10, parallel = FALSE, family = "binomial",
+                            propCutoff = 0.9,
+                            ...){
   
   exprData$phenotype <- phenotype
+  
+  print("Running Stabilized LASSO", quote = FALSE)
+  pb <- txtProgressBar(min = 0, 
+                       max = iterations, 
+                       initial = 0,
+                       style = 3)
   
   lassoResults <- c()
   # pred_metrics <- c()
@@ -118,17 +138,20 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
   set.seed(seed)
   for(k in seq(1,iterations)){
     
+    setTxtProgressBar(pb, k)
+    
     # Splitting data proportional to phenotypeotype composition
     inds <- sample.split(exprData$phenotype, SplitRatio = splitRatio)
     
     #TODO: Add progressbar
-    print(paste0("Currently fitting iteration: ", k, " of ", iterations))
+    # print(paste0("Currently fitting iteration: ", k, " of ", iterations))
     
     # Fitting a glmnet LASSO model for the training data
     cvfit <- glmnetUtils::cv.glmnet(formula = as.formula(formula), data = exprData[inds,], alpha = 1,
-                                    family = "binomial",  
+                                    family = family,  
                                     nfolds = cvFolds, intercept = FALSE,
-                                    parallel = parallel)
+                                    parallel = parallel,
+                                    ...)
     
     # Obtaining fitted coefficients
     tmpCoeffs <- coef(cvfit)
@@ -136,15 +159,17 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
     # Keeping track of results from each of the LASSO models fit in each iteration
     if(is.null(lassoResults)){
       lassoResults <- data.table(probe = tmpCoeffs@Dimnames[[1]][tmpCoeffs@i + 1], 
-                            coefficient_1 = tmpCoeffs@x)
+                                 coefficient_1 = tmpCoeffs@x)
     }else{
       lassoResults <- merge(lassoResults, data.table(probe = tmpCoeffs@Dimnames[[1]][tmpCoeffs@i + 1], 
-                                           coefficient = tmpCoeffs@x), 
-                       all.x=TRUE, all.y=TRUE, 
-                       by="probe", suffixes = c("",paste0("_", k)))
+                                                     coefficient = tmpCoeffs@x), 
+                            all.x=TRUE, all.y=TRUE, 
+                            by="probe", suffixes = c("",paste0("_", k)))
     }
     
   }
+  
+  close(pb)
   
   coefficientSummary <- data.table(probe = lassoResults$probe,
                                    model.count = iterations - rowSums(is.na(lassoResults[, 2:ncol(lassoResults)])),
@@ -153,93 +178,252 @@ stabilizedLasso <- function(exprData, phenotype, formula = NULL,
   
   coefficientSummary <- coefficientSummary[order(coefficientSummary$model.count, decreasing = TRUE)]
   
-  identifiedGenes <- coefficientSummary$probe[(coefficientSummary$model.count/iterations) > propCutoff]
-  identifiedGenes <- unique(unlist(str_split(identifiedGenes, ":")))
+  identifiedGenes <- coefficientSummary$probe[coefficientSummary$model.count > (propCutoff*iterations)]
   
-  corrResults <- c()
+  return(list(coefficientSummary = coefficientSummary, 
+              identifiedGenes = identifiedGenes))
+  
+}
 
-  caseData <- exprData[phenotype == 1,]
-  controlData <- exprData[phenotype == 0,]
+identifyCoreGeneNetworks <- function(identifiedGenes,
+                             exprData, 
+                             phenotype,
+                             nullCorr,
+                             nullDiffCorr,
+                             corrGenes = TRUE,
+                             diffCorrGenes = TRUE){
+  corrResults <- c()
   
-  print(paste0("Currently calculating CGNs"))
-  if(length(identifiedGenes)>0){
+  if(!corrGenes & !diffCorrGenes){
+    stop("No CGNs can result from excluding BOTH correlated and differentially correlated genes.")
+  }
+  
+  if(diffCorrGenes){
+    caseData <- exprData[phenotype == 1,]
+    controlData <- exprData[phenotype == 0,]
+  }
+
+  print("Identifying Core Gene Networks", quote = FALSE)
+  pb <- txtProgressBar(min = 0, 
+                       max = (length(identifiedGenes)*ncol(exprData)), 
+                       initial = 0,
+                       style = 3)
+  
+  prog <- 0
+  for(i in seq(1, length(identifiedGenes))){
+  
+    coreGene <- identifiedGenes[i]
     
-    # For each core gene, co-expression values in the complete dataset,
-    # and each of the phenotypes are calculated.
-    for(i in seq(1, length(identifiedGenes))){
-      
-      coreGene <- identifiedGenes[i]
+    if(corrGenes){
       gene1 <- exprData[[coreGene]]
+    }
+
+    if(diffCorrGenes){
       gene1Case <- caseData[[coreGene]]
       gene1Control <- controlData[[coreGene]]
-      
-      for(j in seq(1, (ncol(exprData)-1))){
-        
-        currGene <- colnames(exprData)[j]
-        gene2 <- exprData[[currGene]]
-        gene2Case <- caseData[[currGene]]
-        gene2Control <- controlData[[currGene]]
-        
-        corTest <- cor.test(gene1, gene2, method = "pearson")
-        caseTest <- cor.test(gene1Case, gene2Case, method = "pearson")
-        controlTest <- cor.test(gene1Control, gene2Control, method = "pearson")
-        
-        currResult <- data.table(core_gene = coreGene,
-                                 secondary_gene = currGene,
-                                 correlation = corTest$estimate,
-                                 pval = corTest$p.value,
-                                 case.corr = caseTest$estimate,
-                                 case.pval = caseTest$p.value,
-                                 control.corr = controlTest$estimate,
-                                 control.pval = controlTest$p.value)
-        
-        corrResults <- rbindlist(list(corrResults, currResult))
-      }
     }
     
-    corrResults$corrdiff <- abs(corrResults$case.corr - corrResults$control.corr)
-    corrResults <- corrResults[corrResults$core_gene != corrResults$secondary_gene, ]
-    
-    colnames(corrResults) <- c("Core Gene", "Secondary Gene", 
-                                "Correlation", "Correlation p-value", "Case Correlation", "Case Correlation p-value",
-                                "Control Correlation", "Control Correlation p-value", "Differential Correlation")
-    
-    # Identifying CGNs using secondary genes that are co-expressed or 
-    # differentially co-expressed.
-    filteredResults <- corrResults[corrResults$Correlation > nullCorr$positiveCut |
-                                     corrResults$Correlation < nullCorr$negativeCut |
-                                     corrResults$`Differential Correlation` > nullDiffCorr,]
-    
-    pathwayResults <- c()
-    
-    print(paste0("Currently conducting SLASSO pathway enrichment"))
-    for(currCoreGene in unique(filteredResults$`Core Gene`)){
+    for(j in seq(1, ncol(exprData))){
+      prog <- prog + 1
       
-      currGeneList <- c(currCoreGene, filteredResults$`Secondary Gene`[filteredResults$`Core Gene` == currCoreGene])
-      currGeneList <- gsub("\\..*","", currGeneList)
+      setTxtProgressBar(pb, prog)
       
-      enrichmentResults <- pathwayEnrichment(interestGene = currGeneList,
-                                             organism = enrichmentOrganism, 
-                                             enrichDatabase = enrichmentEnrichDatabase,
-                                             interestGeneType = enrichmentInterestGeneType, 
-                                             referenceGeneType = enrichmentReferenceGeneType,
-                                             referenceSet = enrichmentReferenceSet, 
-                                             isOutput = enrichmentIsOutput)
+      currGene <- colnames(exprData)[j]
       
-      if(is.null(enrichmentResults) || nrow(enrichmentResults) == 0){
-        print("No pathways enriched. Skipping...")
-        next
-      } 
+      corTest <- list()
+      corTest$estimate <- NA
+      corTest$p.value <- NA
       
-      enrichmentResults$`Core Gene` <- currCoreGene
+      caseTest <- list()
+      caseTest$estimate <- NA
+      caseTest$p.value <- NA
+      controlTest <- list()
+      controlTest$estimate <- NA
+      controlTest$p.value <- NA
       
-      pathwayResults <- rbindlist(list(pathwayResults, enrichmentResults))
+      if(corrGenes){
+        gene2 <- exprData[[currGene]]
+        corTest <- cor.test(gene1, gene2, method = "pearson")
+      }
+      
+      if(diffCorrGenes){
+        gene2Case <- caseData[[currGene]]
+        gene2Control <- controlData[[currGene]]
+        caseTest <- cor.test(gene1Case, gene2Case, method = "pearson")
+        controlTest <- cor.test(gene1Control, gene2Control, method = "pearson")
+      }
+
+      currResult <- data.table(core_gene = coreGene,
+                               secondary_gene = currGene,
+                               correlation = corTest$estimate,
+                               pval = corTest$p.value,
+                               case.corr = caseTest$estimate,
+                               case.pval = caseTest$p.value,
+                               control.corr = controlTest$estimate,
+                               control.pval = controlTest$p.value)
+      
+      corrResults <- rbindlist(list(corrResults, currResult))
     }
   }
   
-  return(list(coefficientSummary = coefficientSummary,
-              coreGenes = identifiedGenes,
-              pathwayResults = pathwayResults))
+  close(pb)
+  
+  corrResults$corrdiff <- abs(corrResults$case.corr - corrResults$control.corr)
+  corrResults <- corrResults[corrResults$core_gene != corrResults$secondary_gene, ]
+  
+  colnames(corrResults) <- c("Core Gene", "Secondary Gene", 
+                             "Correlation", "Correlation p-value", "Case Correlation", "Case Correlation p-value",
+                             "Control Correlation", "Control Correlation p-value", "Differential Correlation")
+  
+  filteredResults <- c()
+  
+  # Identifying CGNs using secondary genes that are co-expressed or 
+  # differentially co-expressed.
+  if(corrGenes){
+    filteredResults <- rbindlist(list(filteredResults, 
+                                      corrResults[corrResults$Correlation > nullCorr$positiveCut |
+                                                                     corrResults$Correlation < nullCorr$negativeCut,]))
+  }
+  
+  if(diffCorrGenes){
+    filteredResults <- rbindlist(list(filteredResults, 
+                                  corrResults[corrResults$`Differential Correlation` > nullDiffCorr,]))
+  }
+  
+  CGNs <- data.table(`Core Gene` = unique(filteredResults$`Core Gene`))
+  CGNs$`Secondary Genes` <- sapply(CGNs$`Core Gene`, function(x) {paste0(filteredResults$`Secondary Gene`[filteredResults$`Core Gene`==x], collapse = ";")})
+
+  return(list(CGNs = CGNs, fullCGNs = filteredResults))
+}
+
+enrichCGNs <- function(coreGeneNetworks,
+                       enrichmentOrganism = "hsapiens", 
+                       enrichmentEnrichDatabase="pathway_KEGG",
+                       enrichmentInterestGeneType="ensembl_gene_id", 
+                       enrichmentReferenceGeneType = "ensembl_gene_id",
+                       enrichmentReferenceSet = "genome", 
+                       enrichmentIsOutput = FALSE,
+                       ...){
+  
+  pathwayResults <- c()
+  
+  print("Conducting pathway enrichment using WebGestaltR", quote = FALSE)
+  
+  for(currCoreGene in unique(coreGeneNetworks$CGNs$`Core Gene`)){
+    
+    currGeneList <- c(currCoreGene, str_split(coreGeneNetworks$CGNs$`Secondary Genes`[coreGeneNetworks$CGNs$`Core Gene` == currCoreGene], ";", simplify = TRUE))
+    
+    enrichmentResults <- pathwayEnrichment(interestGene = currGeneList,
+                                           organism = enrichmentOrganism, 
+                                           enrichDatabase = enrichmentEnrichDatabase,
+                                           interestGeneType = enrichmentInterestGeneType, 
+                                           referenceGeneType = enrichmentReferenceGeneType,
+                                           referenceSet = enrichmentReferenceSet, 
+                                           isOutput = enrichmentIsOutput,
+                                           ...)
+    
+    if(is.null(enrichmentResults) || nrow(enrichmentResults) == 0){
+      print("No pathways enriched. Skipping...")
+      next
+    } 
+    
+    enrichmentResults <- data.table(`Core Gene` = currCoreGene,
+                                    enrichmentResults)
+    
+    pathwayResults <- rbindlist(list(pathwayResults, enrichmentResults))
+  }
+  
+  return(pathwayResults)
+}
+
+pathwayOverlaps <- function(enrichedCGNs){
+  
+  print("Calculating pathway overlaps", quote = FALSE)
+  overlappedResults <- unique(enrichedCGNs[, c("geneSet", "description")])
+  for(currCoreGene in unique(enrichedCGNs$`Core Gene`)){
+    overlappedResults[[currCoreGene]] <- sapply(overlappedResults$geneSet, function(x) {
+      if(nrow(enrichedCGNs[`Core Gene` == currCoreGene & geneSet == x]) == 0){
+        return(0)
+      }else{
+        return(enrichedCGNs[`Core Gene` == currCoreGene & geneSet == x, overlap] / enrichedCGNs[`Core Gene` == currCoreGene & geneSet == x, size])
+      }
+      }
+      )
+  }
+  
+  overlappedResults$POS <- rowSums(as.matrix(overlappedResults[ , -c(1,2)]))
+  overlappedResults <- overlappedResults[order(POS, decreasing = TRUE)]
+  
+  return(overlappedResults)
+  
+}
+
+scope <- function(exprData, phenotype,
+                  removeZeroVar = TRUE,
+                  removeLowVar = TRUE,
+                  lowVarPercentile = 0.25,
+                  formula = NULL, 
+                  seed = 2222,
+                  iterations = 1000, splitRatio = 0.7, 
+                  cvFolds = 10, parallel = FALSE, family = "binomial",
+                  propCutoff = 0.8,
+                  corrIterations = 100, corrProbesPerIter = 1000, 
+                  corrQuantileCutoff = 0.975,
+                  diffCorrIterations = 100, diffCorrProbesPerIter = 1000, 
+                  diffCorrQuantileCutoff = 0.975,
+                  corrGenesCGN = TRUE,
+                  diffCorrGenesCGN = TRUE,
+                  enrichmentOrganism = "hsapiens",
+                  enrichmentEnrichDatabase="pathway_KEGG",
+                  enrichmentInterestGeneType="ensembl_gene_id",
+                  enrichmentReferenceGeneType = "ensembl_gene_id",
+                  enrichmentReferenceSet = "genome",
+                  enrichmentIsOutput = FALSE,
+                  ...){
+  
+  if(removeZeroVar) exprData <- removeZeroVariance(exprData = exprData)
+  if(removeLowVar) exprData <- removeLowVariance(exprData = exprData, quantileToRemove = lowVarPercentile)
+  
+  slassoResults <- stabilizedLASSO(exprData = exprData,
+                                   phenotype = phenotype,
+                                   formula = formula,
+                                   seed = seed,
+                                   iterations = iterations,
+                                   splitRatio = splitRatio,
+                                   cvFolds = cvFolds,
+                                   parallel = parallel,
+                                   family = family,
+                                   propCutoff = propCutoff)
+  
+  nullCorrelations <- nullCorr(exprData = exprData, 
+                               iterations = corrIterations, 
+                               probesPerIter = corrProbesPerIter, 
+                               quantileCutoff = corrQuantileCutoff)
+  
+  nullDiffCorrelations <- nullDiffCorr(exprData = exprData,
+                                       phenotype = phenotype, 
+                                       iterations = diffCorrIterations, 
+                                       probesPerIter = diffCorrProbesPerIter,
+                                       quantileCutoff = diffCorrQuantileCutoff)
+  
+  coreGeneNetworks <- identifyCoreGeneNetworks(identifiedGenes = slassoResults$identifiedGenes,
+                                               exprData = exprData,
+                                               phenotype = phenotype, 
+                                               nullCorr = nullCorrelations, 
+                                               nullDiffCorr = nullDiffCorrelations,
+                                               corrGenes = corrGenesCGN,
+                                               diffCorrGenes = diffCorrGenesCGN)
+  
+  enrichedCGNs <- enrichCGNs(coreGeneNetworks = coreGeneNetworks)
+  
+  pathwayOverlapResults <- pathwayOverlaps(enrichedCGNs = enrichedCGNs)
+  
+  return(list(stabilizedLassoResults = slassoResults,
+              nullCorrelations = nullCorrelations,
+              nullDiffCorrelations = nullDiffCorrelations,
+              coreGeneNetworks = coreGeneNetworks,
+              enrichedCGNs = enrichedCGNs,
+              pathwayOverlapResults = pathwayOverlapResults))
 }
 
 
