@@ -119,7 +119,7 @@ The *SCOPE_Functions.R* script contains all the functions needed to run SCOPE on
 
 # References
 
-1.  P. Kossinna, W. Cai, X. Lu, C. S. Shemanko, Q. Zhang, Stabilized core gene and pathway election uncovers pan-cancer shared pathways and a cancer specific driver (2021), doi:10.1101/2021.12.21.473727.
+1.  P. Kossinna, W. Cai, X. Lu, C. S. Shemanko, Q. Zhang, Stabilized core gene and pathway election uncovers pan-cancer shared pathways and a cancer specific driver (2021), *Under revision for Science Advances.* [doi:10.1101/2021.12.21.473727](https://doi.org/10.1101/2021.12.21.473727).
 
 2.  H. Ooi, glmnetUtils: Utilities for \"Glmnet\" (2021), (available at <https://CRAN.R-project.org/package=glmnetUtils>).
 
