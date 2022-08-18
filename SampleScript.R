@@ -31,16 +31,3 @@ scopeOutputs <- scope(exprData = expr.data,
                       enrichmentReferenceGeneType = "ensembl_gene_id",
                       enrichmentReferenceSet = "genome",
                       enrichmentIsOutput = FALSE)
-
-# expr.data <- removeZeroVariance(expr.data)
-# null.corr <- nullCorr(expr.data)
-# diff.null.corr <- nullDiffCorr(exprData = expr.data, phenotype = phen)
-# 
-# slasso <- stabilizedLASSO(exprData = expr.data, phenotype = phen, seed = 2222,
-#                           iterations = 10, parallel = TRUE)
-# 
-# CGN <- identifyCoreGeneNetworks(identifiedGenes = slasso$identifiedGenes, exprData = expr.data, 
-#                                 phenotype = phen,
-#                                 nullCorr = null.corr, nullDiffCorr = diff.null.corr)
-# 
-# CGNenrichment <- enrichCGNs(CGN)
